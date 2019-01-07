@@ -1,12 +1,24 @@
-pragma solidity ^0.4.25;
-
+pragma solidity ^0.5.2;
 contract ERC20Basic {
-  function totalSupply() public view returns (uint256);
+  uint256 public totalSupply;
   function balanceOf(address who) public view returns (uint256);
   function transfer(address to, uint256 value) public returns (bool);
   event Transfer(address indexed from, address indexed to, uint256 value);
 }
-
+library Whitelist {
+  struct List {
+    mapping(address => bool) registry;
+  }
+  function add(List storage list, address beneficiary) internal {
+    list.registry[beneficiary] = true;
+  }
+  function remove(List storage list, address beneficiary) internal {
+    list.registry[beneficiary] = false;
+  }
+  function check(List storage list, address beneficiary) view internal returns (bool) {
+    return list.registry[beneficiary];
+  }
+}
 contract Ownable {
   address public owner;
   event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
@@ -17,23 +29,11 @@ contract Ownable {
     require(msg.sender == owner);
     _;
   }
-  function transferOwnership(address newOwner) public onlyOwner {
+  function transferOwnership(address newOwner) onlyOwner public {
     require(newOwner != address(0));
     emit OwnershipTransferred(owner, newOwner);
     owner = newOwner;
   }
-}
-
-contract Whitelist is Ownable {
-    address[] public userAddresses;
-    function whitelistAddress (address[] users) onlyOwner external {
-        for (uint i = 0; i < users.length; i++) {
-            userAddresses.push(users[i]);
-        }
-    }
-    function getAllwhitelistAddress() external view returns (address[]) {
-      return userAddresses;
-    }
 }
 
 library SafeMath {
@@ -60,16 +60,18 @@ library SafeMath {
   }
 }
 
+
+
+
+
+
+
+
 contract BasicToken is ERC20Basic {
   using SafeMath for uint256;
   mapping(address => uint256) balances;
-  uint256 totalSupply_;
-  function totalSupply() public view returns (uint256) {
-    return totalSupply_;
-  }
   function transfer(address _to, uint256 _value) public returns (bool) {
     require(_to != address(0));
-    require(_value <= balances[msg.sender]);
     balances[msg.sender] = balances[msg.sender].sub(_value);
     balances[_to] = balances[_to].add(_value);
     emit Transfer(msg.sender, _to, _value);
@@ -80,22 +82,21 @@ contract BasicToken is ERC20Basic {
   }
 }
 
+
 contract ERC20 is ERC20Basic {
   function allowance(address owner, address spender) public view returns (uint256);
   function transferFrom(address from, address to, uint256 value) public returns (bool);
   function approve(address spender, uint256 value) public returns (bool);
   event Approval(address indexed owner, address indexed spender, uint256 value);
 }
-
 contract StandardToken is ERC20, BasicToken {
-  mapping (address => mapping (address => uint256)) internal allowed;
+  mapping (address => mapping (address => uint256)) allowed;
   function transferFrom(address _from, address _to, uint256 _value) public returns (bool) {
     require(_to != address(0));
-    require(_value <= balances[_from]);
-    require(_value <= allowed[_from][msg.sender]);
+    uint256 _allowance = allowed[_from][msg.sender];
     balances[_from] = balances[_from].sub(_value);
     balances[_to] = balances[_to].add(_value);
-    allowed[_from][msg.sender] = allowed[_from][msg.sender].sub(_value);
+    allowed[_from][msg.sender] = _allowance.sub(_value);
     emit Transfer(_from, _to, _value);
     return true;
   }
@@ -104,15 +105,17 @@ contract StandardToken is ERC20, BasicToken {
     emit Approval(msg.sender, _spender, _value);
     return true;
   }
-  function allowance(address _owner, address _spender) public view returns (uint256) {
+  function allowance(address _owner, address _spender) public view returns (uint256 remaining) {
     return allowed[_owner][_spender];
   }
-  function increaseApproval(address _spender, uint _addedValue) public returns (bool) {
+  function increaseApproval (address _spender, uint _addedValue) external
+    returns (bool success) {
     allowed[msg.sender][_spender] = allowed[msg.sender][_spender].add(_addedValue);
     emit Approval(msg.sender, _spender, allowed[msg.sender][_spender]);
     return true;
   }
-  function decreaseApproval(address _spender, uint _subtractedValue) public returns (bool) {
+  function decreaseApproval (address _spender, uint _subtractedValue) external
+    returns (bool success) {
     uint oldValue = allowed[msg.sender][_spender];
     if (_subtractedValue > oldValue) {
       allowed[msg.sender][_spender] = 0;
@@ -124,7 +127,6 @@ contract StandardToken is ERC20, BasicToken {
   }
 }
 
-
 contract MintableToken is StandardToken, Ownable {
   event Mint(address indexed to, uint256 amount);
   event MintFinished();
@@ -134,21 +136,22 @@ contract MintableToken is StandardToken, Ownable {
     _;
   }
   function mint(address _to, uint256 _amount) onlyOwner canMint public returns (bool) {
-    totalSupply_ = totalSupply_.add(_amount);
+    totalSupply = totalSupply.add(_amount);
     balances[_to] = balances[_to].add(_amount);
     emit Mint(_to, _amount);
-    emit Transfer(address(0), _to, _amount);
+    emit Transfer(address(0x0), _to, _amount);
     return true;
   }
-  function finishMinting() onlyOwner canMint public returns (bool) {
+  function finishMinting() onlyOwner public returns (bool) {
     mintingFinished = true;
     emit MintFinished();
     return true;
   }
-  function burnTokens(uint256 _unsoldTokens) onlyOwner external returns (bool) {
-    totalSupply_ = SafeMath.sub(totalSupply_, _unsoldTokens);
+  function burnTokens(uint256 _unsoldTokens) onlyOwner public returns (bool) {
+    totalSupply = SafeMath.sub(totalSupply, _unsoldTokens);
   }
 }
+
 
 
 contract Pausable is Ownable {
@@ -173,11 +176,41 @@ contract Pausable is Ownable {
   }
 }
 
-contract Crowdsale is Ownable, Pausable {
+
+
+
+contract Whitelisted is Ownable {
+  Whitelist.List private _list;
+  modifier onlyWhitelisted() {
+    require(Whitelist.check(_list, msg.sender) == true);
+    _;
+  }
+  event AddressAdded(address beneficiary);
+  event AddressRemoved(address beneficiary);
+
+  constructor() public {
+    Whitelist.add(_list, msg.sender);
+  }
+  function enable(address _beneficiary) external onlyOwner {
+    Whitelist.add(_list, _beneficiary);
+    emit AddressAdded(_beneficiary);
+  }
+  function disable(address _beneficiary) external {
+    Whitelist.remove(_list, _beneficiary);
+    emit AddressRemoved(_beneficiary);
+  }
+  function isListed(address _beneficiary) external view returns (bool){
+    return Whitelist.check(_list, _beneficiary);
+  }
+}
+
+contract Crowdsale is Ownable, Pausable, Whitelisted {
   using SafeMath for uint256;
   MintableToken public token;
   uint256 public minPurchase;
   uint256 public maxPurchase;
+  uint256 public investorStartTime;
+  uint256 public investorEndTime;
   uint256 public preStartTime;
   uint256 public preEndTime;
   uint256 public ICOstartTime;
@@ -215,8 +248,10 @@ contract Crowdsale is Ownable, Pausable {
     require(_startTime >= now);
     require(_endTime >= _startTime);
     require(_rate > 0);
-    require(_wallet != 0x0);
+    require(_wallet != address(0x0));
     token = createTokenContract();
+    investorStartTime = 0;
+    investorEndTime = 0;
     preStartTime = _startTime;
     preEndTime = preStartTime + 30 days;
     ICOstartTime = preEndTime + 5 minutes;
@@ -246,17 +281,23 @@ contract Crowdsale is Ownable, Pausable {
   function createTokenContract() internal returns (MintableToken) {
     return new MintableToken();
   }
-  function () public payable {
+  function () external payable {
     buyTokens(msg.sender);
   }
-  function buyTokens(address beneficiary) whenNotPaused public payable {
-    require(beneficiary != 0x0);
+  function buyTokens(address beneficiary) whenNotPaused onlyWhitelisted  public payable {
+    require(beneficiary != address(0x0));
     require(validPurchase());
     uint256 weiAmount = msg.value;
     uint256 accessTime = now;
     uint256 tokens = 0;
     require((weiAmount >= (minPurchase * 1 ether)) && (weiAmount <= (maxPurchase * 1 ether)));
-    if((accessTime >= flashSaleStartTime) && (accessTime < flashSaleEndTime))
+    if((accessTime >= investorStartTime) && (accessTime < investorEndTime))
+    {
+      tokens = SafeMath.add(tokens, weiAmount.mul(rate));
+      icoSupply = icoSupply.sub(tokens);
+      publicSupply = publicSupply.sub(tokens);
+    }
+    else if((accessTime >= flashSaleStartTime) && (accessTime < flashSaleEndTime))
     {
       tokens = SafeMath.add(tokens, weiAmount.mul(flashSaleBonus));
       tokens = SafeMath.add(tokens, weiAmount.mul(rate));
@@ -306,17 +347,13 @@ contract Crowdsale is Ownable, Pausable {
     weiRaised = weiRaised.add(weiAmount);
     token.mint(beneficiary, tokens);
     emit TokenPurchase(msg.sender, beneficiary, weiAmount, tokens);
-    forwardFunds();
   }
-  function forwardFunds() internal {
-    wallet.transfer(msg.value);
-  }
-  function validPurchase() internal constant returns (bool) {
+  function validPurchase() internal returns (bool) {
     bool withinPeriod = now >= preStartTime && now <= ICOEndTime;
     bool nonZeroPurchase = msg.value != 0;
     return withinPeriod && nonZeroPurchase;
   }
-  function hasEnded() public constant returns (bool) {
+  function hasEnded() public view returns (bool) {
       return now > ICOEndTime;
   }
   function burnToken() onlyOwner external returns (bool) {
@@ -354,13 +391,17 @@ contract Crowdsale is Ownable, Pausable {
     flashSaleEndTime = _flashSaleEndTime;
     flashSaleBonus = _flashSaleBonus;
   }
+  function updateInvestorDates(uint256 _investorStartTime,uint256 _investorEndTime) onlyOwner external {
+    investorStartTime = _investorStartTime;
+    investorEndTime = _investorEndTime;
+  }
   function updateMinMaxInvestment(uint256 _minPurchase,uint256 _maxPurchase) onlyOwner external {
     require(_maxPurchase > _minPurchase);
     require(_minPurchase>0);
     minPurchase = _minPurchase;
     maxPurchase = _maxPurchase;
   }
-  function transferFunds(address[] recipients, uint256[] values) onlyOwner external {
+  function transferFunds(address[] memory recipients, uint256[] memory values) onlyOwner public {
      require(!checkBurnTokens);
      for (uint256 i = 0; i < recipients.length; i++) {
         require(publicSupply >= values[i]);
@@ -368,7 +409,7 @@ contract Crowdsale is Ownable, Pausable {
         token.mint(recipients[i], values[i]);
     }
   }
-  function bountyFunds(address[] recipients, uint256[] values) onlyOwner external {
+  function bountyFunds(address[] memory recipients, uint256[] memory values) onlyOwner public {
      require(!checkBurnTokens);
      for (uint256 i = 0; i < recipients.length; i++) {
         require(bountySupply >= values[i]);
@@ -376,7 +417,7 @@ contract Crowdsale is Ownable, Pausable {
         token.mint(recipients[i], values[i]);
     }
   }
-  function transferPartnershipsTokens(address[] recipients, uint256[] values) onlyOwner external {
+  function transferPartnershipsTokens(address[] memory recipients, uint256[] memory values) onlyOwner public {
     require(!checkBurnTokens);
     require((reserveTimeLock < now));
      for (uint256 i = 0; i < recipients.length; i++) {
@@ -385,7 +426,7 @@ contract Crowdsale is Ownable, Pausable {
         token.mint(recipients[i], values[i]);
     }
   }
-  function transferReserveTokens(address[] recipients, uint256[] values) onlyOwner external {
+  function transferReserveTokens(address[] memory recipients, uint256[] memory values) onlyOwner public {
     require(!checkBurnTokens);
     require((reserveTimeLock < now));
      for (uint256 i = 0; i < recipients.length; i++) {
@@ -394,7 +435,7 @@ contract Crowdsale is Ownable, Pausable {
         token.mint(recipients[i], values[i]);
     }
   }
-  function transferTeamTokens(address[] recipients, uint256[] values) onlyOwner external {
+  function transferTeamTokens(address[] memory recipients, uint256[] memory values) onlyOwner public {
     require(!checkBurnTokens);
     require((now > teamTimeLock));
      for (uint256 i = 0; i < recipients.length; i++) {
@@ -403,7 +444,12 @@ contract Crowdsale is Ownable, Pausable {
         token.mint(recipients[i], values[i]);
     }
   }
+  function getTokenAddress() onlyOwner public view returns (address) {
+    return address(token);
+  }
 }
+
+
 
 contract CappedCrowdsale is Crowdsale {
   using SafeMath for uint256;
@@ -412,30 +458,39 @@ contract CappedCrowdsale is Crowdsale {
     require(_cap > 0);
     cap = _cap;
   }
-  function hasEnded() public view returns (bool) {
-    bool capReached = weiRaised >= cap;
-    return capReached || super.hasEnded();
+  function validPurchase() internal returns (bool) {
+    bool withinPeriod = now >= preStartTime && now <= ICOEndTime;
+    bool nonZeroPurchase = msg.value != 0;
+    return withinPeriod && nonZeroPurchase;
   }
-  function validPurchase() internal view returns (bool) {
-    bool withinCap = weiRaised.add(msg.value) <= cap;
-    return withinCap && super.validPurchase();
+  function hasEnded() public view returns (bool) {
+      return now > ICOEndTime;
   }
 }
+
+
+
+
+
 
 contract FinalizableCrowdsale is Crowdsale {
   using SafeMath for uint256;
   bool isFinalized = false;
   event Finalized();
-  function finalizeCrowdsale() onlyOwner external {
+  function finalizeCrowdsale() onlyOwner public {
     require(!isFinalized);
     require(hasEnded());
     finalization();
     }
   function finalization() internal {
-     emit Finalized();
+    emit Finalized();
     isFinalized = true;
   }
 }
+
+
+
+
 
 contract RefundVault is Ownable {
   using SafeMath for uint256;
@@ -447,7 +502,7 @@ contract RefundVault is Ownable {
   event RefundsEnabled();
   event Refunded(address indexed beneficiary, uint256 weiAmount);
   constructor(address _wallet) public {
-    require(_wallet != address(0));
+    require(_wallet != address(0x0));
     wallet = _wallet;
     state = State.Active;
   }
@@ -459,22 +514,21 @@ contract RefundVault is Ownable {
     require(state == State.Active);
     state = State.Closed;
     emit Closed();
-    wallet.transfer(address(this).balance);
+    msg.sender.transfer(address(this).balance);
   }
   function enableRefunds() onlyOwner external {
     require(state == State.Active);
     state = State.Refunding;
     emit RefundsEnabled();
   }
-  function refund(address investor) public {
+  function refund(address investor) external {
     require(state == State.Refunding);
     uint256 depositedValue = deposited[investor];
     deposited[investor] = 0;
-    investor.transfer(depositedValue);
+    msg.sender.transfer(depositedValue);
     emit Refunded(investor, depositedValue);
   }
 }
-
 contract RefundableCrowdsale is FinalizableCrowdsale {
   using SafeMath for uint256;
   uint256 public goal;
@@ -484,15 +538,15 @@ contract RefundableCrowdsale is FinalizableCrowdsale {
     vault = new RefundVault(wallet);
     goal = _goal;
   }
+  function forwardFunds() internal {
+    vault.deposit.value(msg.value)(msg.sender);
+  }
   function claimRefund() public {
     require(isFinalized);
     require(!goalReached());
     vault.refund(msg.sender);
   }
-  function goalReached() public view returns (bool) {
-    return weiRaised >= goal;
-  }
-  function finalization() internal  {
+  function finalization() internal {
     if (goalReached()) {
       vault.close();
     } else {
@@ -500,10 +554,15 @@ contract RefundableCrowdsale is FinalizableCrowdsale {
     }
     super.finalization();
   }
-  function forwardFunds() internal {
-    vault.deposit.value(msg.value)(msg.sender);
+  function goalReached() public view returns (bool) {
+    return weiRaised >= goal;
+  }
+  function getVaultAddress() onlyOwner public view returns (RefundVault) {
+    return vault;
   }
 }
+
+
 
 contract Dayta is MintableToken {
   string public constant name = "DAYTA";
@@ -511,7 +570,7 @@ contract Dayta is MintableToken {
   uint8 public constant decimals = 18;
   uint256 public _totalSupply = SafeMath.mul(2500000000 , 1 ether);
   constructor() public {
-    totalSupply_ = _totalSupply;
+    totalSupply = _totalSupply;
   }
 }
 
